@@ -354,19 +354,26 @@ async function resolveCloudName() {
 }
 // ---- ライブ映像: 管理画面の人が見ている間だけ、1秒ごとに小さな画像を送る
 function startLive() {
-  const info = st.cloudInfo;
-  if (!settings.liveOk || !info || !info.stream_token || !info.supabase_url || !info.anon_key || !window.supabase) return;
+  const info = st.cloudInfo, msg = t => { $("liveMsg").textContent = "ライブ映像: " + t; };
+  if (!info) return;                                            // クラウドに接続できていない (上の「クラウド:」の表示を見る)
+  if (!settings.liveOk) return msg("オフ (設定の「ライブ映像を…送る」にチェックがありません)");
+  if (!info.stream_token) return msg("使えません (サーバーの関数の貼り替えと、schema_live.sql の実行を確認してください)");
+  if (!info.supabase_url || !info.anon_key) return msg("使えません (サーバーが anon キーを返していません)");
+  if (!window.supabase) return msg("使えません (ライブラリを読み込めません。通信を確認してください)");
   try {
     const sb = supabase.createClient(info.supabase_url, info.anon_key, {auth:{persistSession:false, autoRefreshToken:false}});
     const ch = sb.channel("cam:" + info.stream_token, {config:{broadcast:{self:false}}});
     ch.on("broadcast", {event:"watch"}, () => { st.watchUntil = Date.now() + 15000; });
-    ch.subscribe(s => { st.liveState = s; });
-    st.live = {sb, ch}; $("liveMsg").textContent = "ライブ映像: 待機中 (見ている人はいません)";
+    ch.subscribe((s, err) => {
+      st.liveState = s;
+      if (s !== "SUBSCRIBED") msg("接続できません: " + s + (err && err.message ? " (" + err.message + ")" : ""));
+    });
+    st.live = {sb, ch}; msg("接続中…");
   } catch (e) { $("liveMsg").textContent = "ライブ映像: 開始できません"; }
 }
 function liveTick() {
   if (!st.running || !st.live || !video.videoWidth) return;
-  if (st.liveState !== "SUBSCRIBED") { $("liveMsg").textContent = "ライブ映像: 接続中…"; return; }
+  if (st.liveState !== "SUBSCRIBED") return;                    // 接続中、または、上のエラー表示のまま
   if (Date.now() > st.watchUntil) { $("liveMsg").textContent = "ライブ映像: 待機中 (見ている人はいません)"; return; }
   const w = 480, h = Math.round(video.videoHeight * w / video.videoWidth), c = cv("live", w, h);
   c.getContext("2d").drawImage(video, 0, 0, w, h);

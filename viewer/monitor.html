@@ -24,8 +24,10 @@
   .cap { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:8px; font-size:14px; }
   .st { font-size:12px; padding:2px 10px; border-radius:999px; background:var(--line); white-space:nowrap; }
   .st.live { background:#d1fadf; color:#05603a; }
-  .tile img { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; border-radius:8px; display:block; cursor:zoom-in; }
-  .tile.big img { cursor:zoom-out; max-height:80vh; }
+  .dbg { font-size:11px; color:var(--sub); margin-top:4px; word-break:break-all; }
+  .view { aspect-ratio:16/9; background:#000; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#98a2b3; font-size:13px; overflow:hidden; cursor:zoom-in; }
+  .view img { width:100%; height:100%; object-fit:contain; display:block; }
+  .tile.big .view { cursor:zoom-out; max-height:80vh; }
 </style>
 </head>
 <body>
@@ -65,7 +67,7 @@ function clearAll() {
 }
 function sendWatch() {
   if (document.visibilityState !== "visible") return;                 // 画面を見ていないときは、要求しない (カメラの通信量を節約)
-  tiles.forEach(t => { if (t.joined) t.ch.send({type:"broadcast", event:"watch", payload:{}}); });
+  tiles.forEach(t => { if (t.joined) { t.sent++; Promise.resolve(t.ch.send({type:"broadcast", event:"watch", payload:{}})).then(r => { t.sendRes = String(r); }); } });
 }
 function paintStatus() {
   const now = Date.now();
@@ -73,6 +75,7 @@ function paintStatus() {
     const live = t.last && now - t.last < 4000;
     t.badge.textContent = live ? "● ライブ" : (t.last ? "● 受信なし" : "接続待ち…");
     t.badge.className = "st" + (live ? " live" : "");
+    t.dbg.textContent = `接続: ${t.state} / 合図を送った回数: ${t.sent} (${t.sendRes}) / 受け取った画像: ${t.frames}枚`;
   });
 }
 async function enter(session) {
@@ -87,15 +90,15 @@ async function enter(session) {
   t.data.forEach(row => {
     const cam = c.data.find(x => x.id === row.camera_id); if (!cam) return;
     const el = document.createElement("div"); el.className = "tile";
-    el.innerHTML = `<div class="cap"><b>${esc(cam.name)}</b><span class="st">接続待ち…</span></div><img alt="${esc(cam.name)}">`;
-    el.querySelector("img").onclick = () => el.classList.toggle("big");
+    el.innerHTML = `<div class="cap"><b>${esc(cam.name)}</b><span class="st">接続待ち…</span></div><div class="view"><img alt="" hidden><span class="ph">映像を待っています…</span></div><div class="dbg"></div>`;
+    el.querySelector(".view").onclick = () => el.classList.toggle("big");
     $("grid").appendChild(el);
-    const tile = {ch:null, joined:false, last:0, img:el.querySelector("img"), badge:el.querySelector(".st")};
+    const tile = {ch:null, joined:false, last:0, state:"接続中", sent:0, sendRes:"-", frames:0, dbg:el.querySelector(".dbg"), img:el.querySelector("img"), ph:el.querySelector(".ph"), badge:el.querySelector(".st")};
     tile.ch = sb.channel("cam:" + row.token, {config:{broadcast:{self:false}}});
     tile.ch.on("broadcast", {event:"frame"}, ({payload}) => {
-      if (payload && typeof payload.img === "string" && payload.img.startsWith("data:image/jpeg")) { tile.img.src = payload.img; tile.last = Date.now(); }
+      if (payload && typeof payload.img === "string" && payload.img.startsWith("data:image/jpeg")) { tile.img.src = payload.img; tile.img.hidden = false; tile.ph.hidden = true; tile.last = Date.now(); tile.frames++; }
     });
-    tile.ch.subscribe(s => { tile.joined = s === "SUBSCRIBED"; if (tile.joined) sendWatch(); });
+    tile.ch.subscribe((s, err) => { tile.joined = s === "SUBSCRIBED"; tile.state = s + (err && err.message ? " (" + err.message + ")" : ""); if (tile.joined) sendWatch(); });
     tiles.push(tile);
   });
   watchTimer = setInterval(sendWatch, 5000); statusTimer = setInterval(paintStatus, 1000);

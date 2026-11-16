@@ -57,7 +57,7 @@
   <div class="alert" id="alert"></div>
 
   <section class="card" id="setup">
-    <label for="place">場所の名前 (記録と通知に出ます)</label>
+    <label for="place">場所の名前 (クラウドを使うときは、カメラキーの名前が自動で使われます)</label>
     <input type="text" id="place" maxlength="20" placeholder="例: 玄関">
     <label for="facing">カメラ</label>
     <select id="facing"><option value="environment">背面カメラ</option><option value="user">前面カメラ</option></select>
@@ -84,6 +84,7 @@
            placeholder="https://xxxx.supabase.co/functions/v1/api">
     <label for="cameraKey">カメラキー (管理者から受け取った文字列)</label>
     <input type="password" id="cameraKey" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <label class="chk"><input type="checkbox" id="liveOk" checked> ライブ映像を、見ている人がいるときだけ送る</label>
     <label class="chk"><input type="checkbox" id="cloudTest"> テスト送信にする (管理者のLINEだけに届きます)</label>
     <label for="interval">動きがなくても判定する間隔 (秒 / 0 = しない)</label>
     <input type="number" id="interval" min="0" max="600" value="0" inputmode="numeric">
@@ -98,6 +99,7 @@
       <div class="row"><span class="badge" id="badge">準備中</span><span class="muted" id="msg"></span></div>
       <div class="muted" id="result"></div>
       <div class="muted" id="cloud"></div>
+      <div class="muted" id="liveMsg"></div>
       <div class="muted" id="meta"></div>
       <div class="error" id="error" hidden></div>
       <div class="stats">
@@ -127,6 +129,7 @@
 <dialog id="dlg"><img id="dlgImg" alt=""></dialog>
 
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.7/dist/umd/supabase.js"></script>
 <script>
 "use strict";
 // ======================================================= 計算だけの部分 (画面に依存しない)
@@ -201,7 +204,8 @@ const SENS = {high:{thr:20, cell:10, minCells:1, confirm:2},
 let settings = {};
 const st = {running:false, busy:false, stream:null, timer:null, bear:null, animals:null, labels:null,
             bg:null, streak:0, frames:0, lastShot:0, lastBearAt:0, lastNotifyAt:0, lastInterval:0,
-            counts:{motion:0, bear:0}, bearLog:[], otherLog:[], wake:null};
+            counts:{motion:0, bear:0}, bearLog:[], otherLog:[], wake:null,
+            cloudInfo:null, live:null, liveState:"", watchUntil:0, liveTimer:null};
 let audioCtx = null, alertTimer = null;
 
 function loadSettings() {
@@ -210,14 +214,14 @@ function loadSettings() {
   $("conf").value = String(settings.conf ?? 0.6); $("sens").value = settings.sens ?? "mid";
   $("topic").value = settings.topic ?? ""; $("interval").value = settings.interval ?? 0;
   $("cloudUrl").value = settings.cloudUrl ?? ""; $("cameraKey").value = settings.cameraKey ?? "";
-  $("cloudTest").checked = settings.cloudTest ?? false;
+  $("cloudTest").checked = settings.cloudTest ?? false; $("liveOk").checked = settings.liveOk ?? true;
   $("sound").checked = settings.sound ?? true;
   try { st.bearLog = JSON.parse(localStorage.getItem(LS_LOG) || "[]"); } catch (e) { st.bearLog = []; }
 }
 function readSettings() {
   settings = {place: $("place").value.trim(), facing: $("facing").value, conf: parseFloat($("conf").value),
               sens: $("sens").value, topic: $("topic").value.trim(),
-              cloudUrl: $("cloudUrl").value.trim(), cameraKey: $("cameraKey").value.trim(), cloudTest: $("cloudTest").checked,
+              cloudUrl: $("cloudUrl").value.trim(), cameraKey: $("cameraKey").value.trim(), cloudTest: $("cloudTest").checked, liveOk: $("liveOk").checked,
               interval: Math.max(0, Math.min(600, parseInt($("interval").value, 10) || 0)), sound: $("sound").checked};
   try { localStorage.setItem(LS, JSON.stringify(settings)); } catch (e) {}
 }
@@ -338,6 +342,42 @@ async function notify(message) {
                 {method:"POST", body:message, headers:{"Priority":"5", "Tags":"bear"}});
   } catch (e) { /* 通信できなくても監視は続ける */ }
 }
+async function resolveCloudName() {
+  if (!settings.cloudUrl || !settings.cameraKey) return null;
+  try {
+    const r = await fetch(settings.cloudUrl.replace(/\/+$/, "") + "/whoami", {method:"POST", headers:{"x-camera-key":settings.cameraKey}});
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.ok) { settings.place = j.name; $("cloud").textContent = "クラウド: 「" + j.name + "」として接続しました"; return j; }
+    $("cloud").textContent = "クラウド: カメラキーが正しくありません";
+  } catch (e) { $("cloud").textContent = "クラウド: 通信できません"; }
+  return null;
+}
+// ---- ライブ映像: 管理画面の人が見ている間だけ、1秒ごとに小さな画像を送る
+function startLive() {
+  const info = st.cloudInfo;
+  if (!settings.liveOk || !info || !info.stream_token || !info.supabase_url || !info.anon_key || !window.supabase) return;
+  try {
+    const sb = supabase.createClient(info.supabase_url, info.anon_key, {auth:{persistSession:false, autoRefreshToken:false}});
+    const ch = sb.channel("cam:" + info.stream_token, {config:{broadcast:{self:false}}});
+    ch.on("broadcast", {event:"watch"}, () => { st.watchUntil = Date.now() + 15000; });
+    ch.subscribe(s => { st.liveState = s; });
+    st.live = {sb, ch}; $("liveMsg").textContent = "ライブ映像: 待機中 (見ている人はいません)";
+  } catch (e) { $("liveMsg").textContent = "ライブ映像: 開始できません"; }
+}
+function liveTick() {
+  if (!st.running || !st.live || !video.videoWidth) return;
+  if (st.liveState !== "SUBSCRIBED") { $("liveMsg").textContent = "ライブ映像: 接続中…"; return; }
+  if (Date.now() > st.watchUntil) { $("liveMsg").textContent = "ライブ映像: 待機中 (見ている人はいません)"; return; }
+  const w = 480, h = Math.round(video.videoHeight * w / video.videoWidth), c = cv("live", w, h);
+  c.getContext("2d").drawImage(video, 0, 0, w, h);
+  st.live.ch.send({type:"broadcast", event:"frame", payload:{img:c.toDataURL("image/jpeg", 0.5), t:Date.now()}});
+  $("liveMsg").textContent = "ライブ映像: 配信中 (誰かが見ています)";
+}
+function stopLive() {
+  clearInterval(st.liveTimer);
+  if (st.live) { try { st.live.sb.removeChannel(st.live.ch); } catch (e) {} st.live = null; }
+  st.liveState = ""; st.watchUntil = 0;
+}
 async function reportCloud(bears, pos) {
   if (!settings.cloudUrl || !settings.cameraKey) return;
   try {
@@ -438,6 +478,7 @@ async function start() {
   $("setup").hidden = true; $("run").hidden = false;
   setBadge("準備中", "wait"); $("msg").textContent = "モデルを読み込み中…"; $("result").textContent = ""; $("meta").textContent = "";
   try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  st.cloudInfo = await resolveCloudName();
   try {
     ort.env.wasm.numThreads = 1;
     if (!st.labels) st.labels = await (await fetch("labels.json", {cache:"no-cache"})).json();
@@ -456,9 +497,10 @@ async function start() {
   Object.assign(st, {running:true, bg:null, streak:0, frames:0, lastShot:0, lastInterval:Date.now(), busy:false});
   st.counts = {motion:0, bear:0}; render(); keepAwake();
   st.timer = setInterval(tick, 200);
+  startLive(); st.liveTimer = setInterval(liveTick, 1000);
 }
 function stop() {
-  st.running = false; clearInterval(st.timer);
+  st.running = false; clearInterval(st.timer); stopLive(); $("liveMsg").textContent = "";
   if (st.stream) st.stream.getTracks().forEach(t => t.stop());
   if (st.wake) { try { st.wake.release(); } catch (e) {} st.wake = null; }
   $("setup").hidden = false; $("run").hidden = true; $("dim").hidden = true;

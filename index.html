@@ -74,11 +74,17 @@
       <option value="mid">標準</option>
       <option value="low">鈍い (大きな動きだけ)</option>
     </select>
-    <label for="topic">通知先 (ntfy のトピック名)</label>
+    <label for="topic">(任意) ntfy の通知先</label>
     <input type="text" id="topic" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"
            placeholder="例: kuma-h7x2q9-yamada">
     <div class="muted" style="margin-top:4px;">ntfy アプリに同じ名前を登録すると、熊を検出したとき通知が届きます。
       他の人に推測されない長い名前にしてください。空欄なら通知しません。</div>
+    <label for="cloudUrl">クラウドへの報告先 (熊を見つけたら送ります)</label>
+    <input type="text" id="cloudUrl" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"
+           placeholder="https://xxxx.supabase.co/functions/v1/api">
+    <label for="cameraKey">カメラキー (管理者から受け取った文字列)</label>
+    <input type="password" id="cameraKey" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <label class="chk"><input type="checkbox" id="cloudTest"> テスト送信にする (管理者のLINEだけに届きます)</label>
     <label for="interval">動きがなくても判定する間隔 (秒 / 0 = しない)</label>
     <input type="number" id="interval" min="0" max="600" value="0" inputmode="numeric">
     <label class="chk"><input type="checkbox" id="sound" checked> 熊を検出したら音を鳴らす</label>
@@ -91,6 +97,7 @@
       <video id="video" playsinline muted autoplay></video>
       <div class="row"><span class="badge" id="badge">準備中</span><span class="muted" id="msg"></span></div>
       <div class="muted" id="result"></div>
+      <div class="muted" id="cloud"></div>
       <div class="muted" id="meta"></div>
       <div class="error" id="error" hidden></div>
       <div class="stats">
@@ -202,12 +209,15 @@ function loadSettings() {
   $("place").value = settings.place ?? ""; $("facing").value = settings.facing ?? "environment";
   $("conf").value = String(settings.conf ?? 0.6); $("sens").value = settings.sens ?? "mid";
   $("topic").value = settings.topic ?? ""; $("interval").value = settings.interval ?? 0;
+  $("cloudUrl").value = settings.cloudUrl ?? ""; $("cameraKey").value = settings.cameraKey ?? "";
+  $("cloudTest").checked = settings.cloudTest ?? false;
   $("sound").checked = settings.sound ?? true;
   try { st.bearLog = JSON.parse(localStorage.getItem(LS_LOG) || "[]"); } catch (e) { st.bearLog = []; }
 }
 function readSettings() {
   settings = {place: $("place").value.trim(), facing: $("facing").value, conf: parseFloat($("conf").value),
               sens: $("sens").value, topic: $("topic").value.trim(),
+              cloudUrl: $("cloudUrl").value.trim(), cameraKey: $("cameraKey").value.trim(), cloudTest: $("cloudTest").checked,
               interval: Math.max(0, Math.min(600, parseInt($("interval").value, 10) || 0)), sound: $("sound").checked};
   try { localStorage.setItem(LS, JSON.stringify(settings)); } catch (e) {}
 }
@@ -328,6 +338,18 @@ async function notify(message) {
                 {method:"POST", body:message, headers:{"Priority":"5", "Tags":"bear"}});
   } catch (e) { /* 通信できなくても監視は続ける */ }
 }
+async function reportCloud(bears, pos) {
+  if (!settings.cloudUrl || !settings.cameraKey) return;
+  try {
+    const r = await fetch(settings.cloudUrl.replace(/\/+$/, "") + "/report", {method:"POST",
+      headers:{"Content-Type":"application/json", "x-camera-key":settings.cameraKey},
+      body: JSON.stringify({confidence: Math.max(...bears.map(b => b.conf)), count: bears.length, pos, test: !!settings.cloudTest})});
+    const j = await r.json().catch(() => ({}));
+    $("cloud").textContent = r.ok && j.ok
+      ? "クラウド: 送信しました (" + (j.skipped ? "短時間の重複のため省略" : j.status === "pending" ? "管理者の確認待ち" : j.notified + "人に通知") + (j.notify_error ? " / LINE送信エラー" : "") + ")"
+      : "クラウド: 送信できません (" + (j.error || r.status) + ")";
+  } catch (e) { $("cloud").textContent = "クラウド: 通信できません (あとで再送はされません)"; }
+}
 function onBear(frame, bears) {
   const now = Date.now(); if (now - st.lastBearAt < COOLDOWN) return; st.lastBearAt = now;
   const pos = whereIn(bears, frame.width, frame.height), place = settings.place || "このスマホ";
@@ -338,6 +360,7 @@ function onBear(frame, bears) {
   st.bearLog = st.bearLog.slice(0, 200); saveLog();
   showAlert(`${place}(画面の${pos})で熊を検出しました!`);
   if (settings.sound) beep();
+  reportCloud(bears, pos);
   notify(`熊を検出: ${place} (画面の${pos}) 信頼度 ${confs} ${new Date().toLocaleTimeString("ja-JP")}`);
 }
 async function onOther(frame, nb) {

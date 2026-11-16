@@ -1,0 +1,15 @@
+{
+  "bear": [
+    "bear"
+  ],
+  "bear_imgsz": 320,
+  "animals": [
+    "boar",
+    "deer",
+    "fox",
+    "monkey",
+    "none",
+    "tanuki"
+  ],
+  "animals_imgsz": 224
+}

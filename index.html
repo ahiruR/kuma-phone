@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>熊検知 (スマホ単体)</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --text:#1d2433; --sub:#667085; --line:#e4e7ec;
+          --green:#12a150; --red:#d92d20; --amber:#f79009; --blue:#2e6ee6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111418; --card:#1a1f27; --text:#e8ebf0; --sub:#98a2b3; --line:#2b323d; }
+  }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; font-family:system-ui,"Hiragino Sans","Yu Gothic UI",Meiryo,sans-serif;
+         background:var(--bg); color:var(--text); padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  main { max-width:560px; margin:0 auto; padding:12px; display:grid; gap:12px; }
+  h1 { font-size:19px; margin:4px 0; } h1 small { font-size:12px; color:var(--sub); font-weight:400; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  label { display:block; font-size:13px; color:var(--sub); margin:12px 0 4px; }
+  label.chk { display:flex; gap:8px; align-items:center; }
+  input[type=text], input[type=number], select { width:100%; padding:10px; font-size:16px; border-radius:8px;
+         border:1px solid var(--line); background:var(--card); color:var(--text); }
+  button { font-size:16px; border:0; border-radius:10px; padding:12px 14px; cursor:pointer;
+           background:var(--line); color:var(--text); }
+  button.big { width:100%; padding:18px; font-size:20px; font-weight:700; color:#fff; margin-top:16px; }
+  button.green { background:var(--green); } button.red { background:var(--red); color:#fff; }
+  button:disabled { opacity:.55; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0; }
+  .row button { flex:1; }
+  .muted { color:var(--sub); font-size:13px; }
+  video { width:100%; border-radius:10px; background:#000; display:block; max-height:50vh; object-fit:contain; }
+  .badge { display:inline-block; padding:4px 12px; border-radius:999px; font-weight:600; font-size:14px;
+           background:var(--line); } .badge.run { background:#d1fadf; color:#05603a; }
+  .badge.wait { background:#fef0c7; color:#93370d; } .badge.err { background:#fee4e2; color:#912018; }
+  .alert { display:none; background:var(--red); color:#fff; padding:14px 16px; border-radius:12px;
+           font-size:18px; font-weight:700; cursor:pointer; }
+  .alert.on { display:block; animation:blink 1s infinite; } @keyframes blink { 50% { opacity:.65; } }
+  .error { white-space:pre-wrap; background:#fee4e2; color:#912018; padding:10px 12px; border-radius:8px;
+           font-size:14px; margin-top:10px; }
+  .stats { display:grid; grid-template-columns:repeat(2,1fr); gap:8px; margin-top:10px; }
+  .stat { text-align:center; padding:10px 4px; border-radius:10px; background:var(--bg); }
+  .stat b { display:block; font-size:22px; }
+  .ev { display:flex; gap:10px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }
+  .ev:first-child { border-top:0; }
+  .ev img { width:84px; height:56px; object-fit:cover; border-radius:6px; background:#000; cursor:pointer; }
+  .ev .t { font-size:13px; } .k { font-weight:700; } .k.bear { color:var(--red); } .k.animal { color:var(--blue); }
+  .k.motion { color:var(--sub); } .pos { color:var(--red); font-weight:600; }
+  #dim { position:fixed; inset:0; background:#000; color:#333; z-index:50; display:flex;
+         align-items:center; justify-content:center; font-size:14px; }
+  dialog { border:0; border-radius:12px; padding:0; max-width:94vw; } dialog img { max-width:92vw; max-height:85vh; display:block; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🐻 熊検知 <small>スマホ単体</small></h1>
+  <div class="alert" id="alert"></div>
+
+  <section class="card" id="setup">
+    <label for="place">場所の名前 (記録と通知に出ます)</label>
+    <input type="text" id="place" maxlength="20" placeholder="例: 玄関">
+    <label for="facing">カメラ</label>
+    <select id="facing"><option value="environment">背面カメラ</option><option value="user">前面カメラ</option></select>
+    <label for="conf">熊と判定する厳しさ</label>
+    <select id="conf">
+      <option value="0.4">ゆるい (0.4) 見逃しにくい・誤検出が増える</option>
+      <option value="0.6">標準 (0.6)</option>
+      <option value="0.75">厳しい (0.75)</option>
+      <option value="0.85">とても厳しい (0.85)</option>
+    </select>
+    <label for="sens">動きへの反応</label>
+    <select id="sens">
+      <option value="high">敏感 (小さな動きも拾う)</option>
+      <option value="mid">標準</option>
+      <option value="low">鈍い (大きな動きだけ)</option>
+    </select>
+    <label for="topic">通知先 (ntfy のトピック名)</label>
+    <input type="text" id="topic" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"
+           placeholder="例: kuma-h7x2q9-yamada">
+    <div class="muted" style="margin-top:4px;">ntfy アプリに同じ名前を登録すると、熊を検出したとき通知が届きます。
+      他の人に推測されない長い名前にしてください。空欄なら通知しません。</div>
+    <label for="interval">動きがなくても判定する間隔 (秒 / 0 = しない)</label>
+    <input type="number" id="interval" min="0" max="600" value="0" inputmode="numeric">
+    <label class="chk"><input type="checkbox" id="sound" checked> 熊を検出したら音を鳴らす</label>
+    <button class="big green" id="start">▶ 開始</button>
+    <div class="muted" style="margin-top:10px;">映像はこのスマホの中だけで処理され、外には送られません (通知の文字だけが送られます)。</div>
+  </section>
+
+  <section id="run" hidden style="display:grid; gap:12px;">
+    <div class="card">
+      <video id="video" playsinline muted autoplay></video>
+      <div class="row"><span class="badge" id="badge">準備中</span><span class="muted" id="msg"></span></div>
+      <div class="muted" id="result"></div>
+      <div class="muted" id="meta"></div>
+      <div class="error" id="error" hidden></div>
+      <div class="stats">
+        <div class="stat"><b id="cBear">0</b><span class="muted">熊を検出</span></div>
+        <div class="stat"><b id="cMotion">0</b><span class="muted">動きを判定</span></div>
+      </div>
+      <div class="row">
+        <button id="manual">今すぐ判定</button>
+        <button id="dimBtn">画面を暗くする</button>
+      </div>
+      <button class="big red" id="stop" style="margin-top:6px;">■ 終了</button>
+      <div class="muted" style="margin-top:8px;">動かしている間は、この画面を開いたまま充電してください。画面を閉じたりアプリを切り替えたりすると止まります。</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <b>🐻 熊の記録</b>
+    <div id="bearEvents" style="margin-top:8px;"><span class="muted">まだ熊は検出されていません</span></div>
+    <div class="row"><button id="csv">CSVで保存</button><button id="clearLog">記録を消す</button></div>
+  </section>
+  <section class="card">
+    <b>その他の記録 (動物・動き)</b>
+    <div id="otherEvents" style="margin-top:8px;"><span class="muted">まだありません</span></div>
+  </section>
+</main>
+<div id="dim" hidden>画面をタップすると戻ります (判定は続いています)</div>
+<dialog id="dlg"><img id="dlgImg" alt=""></dialog>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<script>
+"use strict";
+// ======================================================= 計算だけの部分 (画面に依存しない)
+// ---- PURE START
+const POS = [["左上","上","右上"],["左","中央","右"],["左下","下","右下"]];
+function whereIn(boxes, w, h) {
+  const out = [];
+  for (const b of boxes) {
+    const cx = (b.x1 + b.x2) / 2 / w, cy = (b.y1 + b.y2) / 2 / h;
+    const n = POS[Math.min(2, Math.floor(cy * 3))][Math.min(2, Math.floor(cx * 3))];
+    if (!out.includes(n)) out.push(n);
+  }
+  return out.join("・");
+}
+function iou(a, b) {
+  const iw = Math.max(0, Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1));
+  const ih = Math.max(0, Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1));
+  const inter = iw * ih;
+  return inter / ((a.x2 - a.x1) * (a.y2 - a.y1) + (b.x2 - b.x1) * (b.y2 - b.y1) - inter + 1e-9);
+}
+function nms(boxes, thr) {
+  boxes.sort((a, b) => b.conf - a.conf);
+  const keep = [];
+  for (const b of boxes) if (keep.every(k => iou(k, b) < thr)) keep.push(b);
+  return keep;
+}
+// YOLO(ultralytics)のONNX出力 [1, 4+クラス数, 候補数] を、元画像の座標の枠に直す
+// lb = {sc, px, py} (レターボックスの倍率と余白)
+function decodeDetections(dims, d, lb, W, H, minConf) {
+  const clampX = v => Math.max(0, Math.min(W, v)), clampY = v => Math.max(0, Math.min(H, v));
+  const boxes = [];
+  if (dims.length === 3 && dims[2] === 6 && dims[1] <= 1000) {            // NMS込みの出力 [1, 件数, 6]
+    for (let i = 0; i < dims[1]; i++) {
+      const conf = d[i * 6 + 4]; if (conf < minConf) continue;
+      boxes.push({x1: clampX((d[i*6] - lb.px) / lb.sc), y1: clampY((d[i*6+1] - lb.py) / lb.sc),
+                  x2: clampX((d[i*6+2] - lb.px) / lb.sc), y2: clampY((d[i*6+3] - lb.py) / lb.sc), conf, cls: d[i*6+5]});
+    }
+    return boxes;
+  }
+  const chFirst = dims[1] < dims[2];
+  const C = chFirst ? dims[1] : dims[2], N = chFirst ? dims[2] : dims[1], nc = C - 4;
+  const at = (c, i) => chFirst ? d[c * N + i] : d[i * C + c];
+  for (let i = 0; i < N; i++) {
+    let best = 0, bk = 0;
+    for (let k = 0; k < nc; k++) { const v = at(4 + k, i); if (v > best) { best = v; bk = k; } }
+    if (best < minConf) continue;
+    const cx = at(0, i), cy = at(1, i), w = at(2, i), h = at(3, i);
+    boxes.push({x1: clampX((cx - w / 2 - lb.px) / lb.sc), y1: clampY((cy - h / 2 - lb.py) / lb.sc),
+                x2: clampX((cx + w / 2 - lb.px) / lb.sc), y2: clampY((cy + h / 2 - lb.py) / lb.sc),
+                conf: best, cls: bk});
+  }
+  return nms(boxes, 0.45);
+}
+function softmaxIfNeeded(a) {
+  let s = 0; for (const v of a) s += v;
+  if (Math.abs(s - 1) < 0.01) return Array.from(a);
+  const m = Math.max(...a), e = Array.from(a, v => Math.exp(v - m)), t = e.reduce((x, y) => x + y, 0);
+  return e.map(v => v / t);
+}
+// ---- PURE END
+
+// ======================================================= 設定・状態
+const $ = id => document.getElementById(id);
+const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const LS = "bearPhoneSettings", LS_LOG = "bearPhoneLog";
+const JP = {boar:"イノシシ", deer:"シカ", monkey:"サル", fox:"キツネ", tanuki:"タヌキ",
+            serow:"カモシカ", hare:"ノウサギ", person:"人"};
+const SW = 160, SH = 120, WARM = 25, COOLDOWN = 10000, NOTIFY_GAP = 30000;
+const SENS = {high:{thr:20, cell:10, minCells:1, confirm:2},
+              mid:{thr:28, cell:16, minCells:2, confirm:3},
+              low:{thr:38, cell:20, minCells:5, confirm:4}};
+let settings = {};
+const st = {running:false, busy:false, stream:null, timer:null, bear:null, animals:null, labels:null,
+            bg:null, streak:0, frames:0, lastShot:0, lastBearAt:0, lastNotifyAt:0, lastInterval:0,
+            counts:{motion:0, bear:0}, bearLog:[], otherLog:[], wake:null};
+let audioCtx = null, alertTimer = null;
+
+function loadSettings() {
+  try { settings = JSON.parse(localStorage.getItem(LS) || "{}"); } catch (e) { settings = {}; }
+  $("place").value = settings.place ?? ""; $("facing").value = settings.facing ?? "environment";
+  $("conf").value = String(settings.conf ?? 0.6); $("sens").value = settings.sens ?? "mid";
+  $("topic").value = settings.topic ?? ""; $("interval").value = settings.interval ?? 0;
+  $("sound").checked = settings.sound ?? true;
+  try { st.bearLog = JSON.parse(localStorage.getItem(LS_LOG) || "[]"); } catch (e) { st.bearLog = []; }
+}
+function readSettings() {
+  settings = {place: $("place").value.trim(), facing: $("facing").value, conf: parseFloat($("conf").value),
+              sens: $("sens").value, topic: $("topic").value.trim(),
+              interval: Math.max(0, Math.min(600, parseInt($("interval").value, 10) || 0)), sound: $("sound").checked};
+  try { localStorage.setItem(LS, JSON.stringify(settings)); } catch (e) {}
+}
+function saveLog() {
+  try { localStorage.setItem(LS_LOG, JSON.stringify(st.bearLog.slice(0, 40))); } catch (e) {}
+}
+
+// ======================================================= 画面表示
+function setBadge(text, cls) { const b = $("badge"); b.textContent = text; b.className = "badge " + (cls || ""); }
+function showError(t) { const e = $("error"); e.textContent = t || ""; e.hidden = !t; }
+function showAlert(text) {
+  const a = $("alert"); a.textContent = "⚠ " + text; a.classList.add("on");
+  clearTimeout(alertTimer); alertTimer = setTimeout(() => a.classList.remove("on"), 20000);
+}
+$("alert").onclick = () => $("alert").classList.remove("on");
+function beep() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    for (let i = 0; i < 3; i++) {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = "square"; o.frequency.value = 880; g.gain.value = 0.15;
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(audioCtx.currentTime + i * 0.35); o.stop(audioCtx.currentTime + i * 0.35 + 0.22);
+    }
+  } catch (e) {}
+}
+function evHtml(e) {
+  const label = {bear:"熊", animal:"動物", motion:"動き"}[e.kind] || e.kind;
+  const when = new Date(e.t).toLocaleString("ja-JP", {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit"});
+  const place = e.kind === "bear" ? `<br><span class="pos">📍 ${esc(e.place)}${e.pos ? " ・ 画面の" + esc(e.pos) : ""}</span>` : "";
+  return `<div class="ev">${e.img ? `<img src="${e.img}" data-full="${e.img}">` : ""}
+    <div class="t"><span class="k ${e.kind}">${label}</span> ${esc(when)}<br>${esc(e.text)}${place}</div></div>`;
+}
+function renderList(id, list, empty) {
+  const box = $(id);
+  box.innerHTML = list.length ? list.map(evHtml).join("") : `<span class="muted">${empty}</span>`;
+  box.querySelectorAll("img").forEach(im => im.onclick = () => { $("dlgImg").src = im.dataset.full; $("dlg").showModal(); });
+}
+function render() {
+  $("cBear").textContent = st.counts.bear; $("cMotion").textContent = st.counts.motion;
+  renderList("bearEvents", st.bearLog, "まだ熊は検出されていません");
+  renderList("otherEvents", st.otherLog, "まだありません");
+}
+$("dlg").onclick = () => $("dlg").close();
+
+// ======================================================= モデル読み込み・判定
+const canvases = {};
+function cv(key, w, h) {
+  if (!canvases[key]) { const c = document.createElement("canvas"); c.getContext("2d", {willReadFrequently:true}); canvases[key] = c; }
+  const c = canvases[key]; if (c.width !== w) c.width = w; if (c.height !== h) c.height = h; return c;
+}
+async function loadModel(url) {
+  const r = await fetch(url, {cache:"force-cache"});
+  if (!r.ok) throw new Error(url + " を読み込めません (" + r.status + ")");
+  return ort.InferenceSession.create(await r.arrayBuffer(), {executionProviders:["wasm"]});
+}
+function grabFrame() {
+  const vw = video.videoWidth, vh = video.videoHeight, k = Math.min(1, 960 / vw);
+  const c = cv("frame", Math.round(vw * k), Math.round(vh * k));
+  c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+  return c;
+}
+function letterbox(src, S) {
+  const w = src.width, h = src.height, sc = Math.min(S / w, S / h);
+  const nw = Math.round(w * sc), nh = Math.round(h * sc), px = Math.floor((S - nw) / 2), py = Math.floor((S - nh) / 2);
+  const c = cv("lb" + S, S, S), ctx = c.getContext("2d");
+  ctx.fillStyle = "#727272"; ctx.fillRect(0, 0, S, S); ctx.drawImage(src, px, py, nw, nh);
+  return {data: toTensorData(ctx.getImageData(0, 0, S, S).data, S), sc, px, py};
+}
+function toTensorData(rgba, S) {
+  const n = S * S, f = new Float32Array(3 * n);
+  for (let i = 0; i < n; i++) { f[i] = rgba[i*4] / 255; f[n + i] = rgba[i*4+1] / 255; f[2*n + i] = rgba[i*4+2] / 255; }
+  return f;
+}
+async function runModel(session, data, S) {
+  const feeds = {}; feeds[session.inputNames[0]] = new ort.Tensor("float32", data, [1, 3, S, S]);
+  const res = await session.run(feeds);
+  return res[session.outputNames[0]];
+}
+async function detectBears(frame, minConf) {
+  const S = st.labels.bear_imgsz || 320, lb = letterbox(frame, S);
+  const out = await runModel(st.bear, lb.data, S);
+  return decodeDetections(out.dims, out.data, lb, frame.width, frame.height, minConf);
+}
+async function classifyRegion(frame, nb) {
+  const S = st.labels.animals_imgsz || 224, names = st.labels.animals;
+  const x1 = nb.x1 * frame.width, y1 = nb.y1 * frame.height, x2 = nb.x2 * frame.width, y2 = nb.y2 * frame.height;
+  const pad = Math.max(x2 - x1, y2 - y1) * 0.15 + 10;
+  const rx = Math.max(0, x1 - pad), ry = Math.max(0, y1 - pad);
+  const rw = Math.min(frame.width, x2 + pad) - rx, rh = Math.min(frame.height, y2 + pad) - ry;
+  const side = Math.min(rw, rh);                                        // 中央の正方形を切り出す (学習時と同じ)
+  const c = cv("cls", S, S), ctx = c.getContext("2d");
+  ctx.drawImage(frame, rx + (rw - side) / 2, ry + (rh - side) / 2, side, side, 0, 0, S, S);
+  const out = await runModel(st.animals, toTensorData(ctx.getImageData(0, 0, S, S).data, S), S);
+  const p = softmaxIfNeeded(out.data); let k = 0; for (let i = 1; i < p.length; i++) if (p[i] > p[k]) k = i;
+  return {name: names[k] ?? String(k), conf: p[k]};
+}
+
+// ======================================================= 記録・通知
+function snapshot(frame, boxes, width) {
+  const k = Math.min(1, width / frame.width), c = document.createElement("canvas");
+  c.width = Math.round(frame.width * k); c.height = Math.round(frame.height * k);
+  const ctx = c.getContext("2d"); ctx.drawImage(frame, 0, 0, c.width, c.height);
+  ctx.lineWidth = 3; ctx.font = "bold 16px sans-serif";
+  for (const b of boxes || []) {
+    ctx.strokeStyle = "#00e000"; ctx.strokeRect(b.x1 * k, b.y1 * k, (b.x2 - b.x1) * k, (b.y2 - b.y1) * k);
+    ctx.fillStyle = "#00e000"; ctx.fillText("Bear " + b.conf.toFixed(2), b.x1 * k + 2, Math.max(16, b.y1 * k - 4));
+  }
+  ctx.fillStyle = "#fff"; ctx.fillText(new Date().toLocaleString("ja-JP"), 8, 22);
+  return c.toDataURL("image/jpeg", 0.7);
+}
+async function notify(message) {
+  const now = Date.now(); if (!settings.topic || now - st.lastNotifyAt < NOTIFY_GAP) return;
+  st.lastNotifyAt = now;
+  try {
+    await fetch("https://ntfy.sh/" + encodeURIComponent(settings.topic),
+                {method:"POST", body:message, headers:{"Priority":"5", "Tags":"bear"}});
+  } catch (e) { /* 通信できなくても監視は続ける */ }
+}
+function onBear(frame, bears) {
+  const now = Date.now(); if (now - st.lastBearAt < COOLDOWN) return; st.lastBearAt = now;
+  const pos = whereIn(bears, frame.width, frame.height), place = settings.place || "このスマホ";
+  const confs = bears.map(b => b.conf.toFixed(2)).join(", ");
+  st.counts.bear++;
+  st.bearLog.unshift({t:now, kind:"bear", place, pos, n:bears.length, confs,
+                      text:`熊を検出 ${bears.length}頭 (信頼度 ${confs})`, img:snapshot(frame, bears, 480)});
+  st.bearLog = st.bearLog.slice(0, 200); saveLog();
+  showAlert(`${place}(画面の${pos})で熊を検出しました!`);
+  if (settings.sound) beep();
+  notify(`熊を検出: ${place} (画面の${pos}) 信頼度 ${confs} ${new Date().toLocaleTimeString("ja-JP")}`);
+}
+async function onOther(frame, nb) {
+  let entry = {t:Date.now(), kind:"motion", text:"動きを検知 -> 熊ではありません", img:snapshot(frame, [], 240)};
+  if (st.animals && nb) {
+    const r = await classifyRegion(frame, nb);
+    if (r.name !== "none" && r.conf >= 0.5) {
+      entry = {...entry, kind:"animal", text:`熊ではありません。${JP[r.name] || r.name}の可能性 (${r.conf.toFixed(2)})`};
+    }
+  }
+  st.otherLog.unshift(entry); st.otherLog = st.otherLog.slice(0, 30);
+}
+async function analyze(reason, nb) {
+  st.busy = true; const t0 = performance.now();
+  try {
+    const frame = grabFrame();
+    const dets = await detectBears(frame, 0.25);
+    const bears = dets.filter(b => b.conf >= settings.conf);
+    const top = dets.length ? Math.max(...dets.map(b => b.conf)) : 0;
+    if (bears.length) { $("result").textContent = `最後の判定: 熊 ${bears.map(b => b.conf.toFixed(2)).join(", ")}`; onBear(frame, bears); }
+    else {
+      $("result").textContent = `最後の判定: 熊なし (最高 ${top.toFixed(2)})`;
+      if (reason === "motion") { st.counts.motion++; await onOther(frame, nb); }
+    }
+    $("meta").textContent = `判定にかかった時間 ${Math.round(performance.now() - t0)}ms`;
+  } catch (e) { showError("判定でエラー: " + e.message); }
+  finally { st.busy = false; render(); }
+}
+
+// ======================================================= 動き検知 (200msごと)
+function tick() {
+  if (!st.running || st.busy || !video.videoWidth) return;
+  const sctx = cv("small", SW, SH).getContext("2d");
+  sctx.drawImage(video, 0, 0, SW, SH);
+  const d = sctx.getImageData(0, 0, SW, SH).data, g = new Float32Array(SW * SH);
+  for (let i = 0; i < g.length; i++) g[i] = 0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2];
+  st.frames++;
+  if (!st.bg) { st.bg = Float32Array.from(g); return; }
+
+  const P = SENS[settings.sens] || SENS.mid, cols = SW / 8, rows = SH / 8, cnt = new Uint8Array(cols * rows);
+  for (let i = 0; i < g.length; i++)
+    if (Math.abs(g[i] - st.bg[i]) > P.thr) cnt[((((i / SW) | 0) >> 3) * cols) + ((i % SW) >> 3)]++;
+  let active = 0, x0 = cols, y0 = rows, x1 = -1, y1 = -1;
+  for (let c = 0; c < cnt.length; c++) if (cnt[c] > P.cell) {
+    active++; const x = c % cols, y = (c / cols) | 0;
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+  }
+  const rate = st.frames <= WARM ? 0.2 : (active ? 0.01 : 0.05);
+  for (let i = 0; i < g.length; i++) st.bg[i] += (g[i] - st.bg[i]) * rate;
+
+  const now = Date.now();
+  if (st.frames <= WARM) { setBadge("学習中", "wait"); $("msg").textContent = "背景を覚えています (動かないでください)"; return; }
+  setBadge("監視中", "run");
+  if (active > cnt.length * 0.4) {                                // 画面全体が変わった (明るさの変化など)
+    st.bg = Float32Array.from(g); st.streak = 0; $("msg").textContent = "画面全体の変化を無視しています"; return;
+  }
+  if (active >= P.minCells) { st.streak++; $("msg").textContent = `動きを検知 ${Math.min(st.streak, P.confirm)}/${P.confirm}`; }
+  else { st.streak = Math.max(0, st.streak - 1); $("msg").textContent = "動きなし"; }
+
+  if (st.streak >= P.confirm && now - st.lastShot > COOLDOWN) {
+    st.lastShot = now; st.streak = 0;
+    analyze("motion", {x1: x0 / cols, y1: y0 / rows, x2: (x1 + 1) / cols, y2: (y1 + 1) / rows});
+  } else if (settings.interval > 0 && now - st.lastInterval >= settings.interval * 1000) {
+    st.lastInterval = now; analyze("interval", null);
+  }
+}
+
+// ======================================================= 開始・終了
+const video = $("video");
+async function keepAwake() { try { if ("wakeLock" in navigator) st.wake = await navigator.wakeLock.request("screen"); } catch (e) {} }
+document.addEventListener("visibilitychange", () => { if (st.running && document.visibilityState === "visible") keepAwake(); });
+
+async function start() {
+  readSettings(); showError("");
+  $("setup").hidden = true; $("run").hidden = false;
+  setBadge("準備中", "wait"); $("msg").textContent = "モデルを読み込み中…"; $("result").textContent = ""; $("meta").textContent = "";
+  try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  try {
+    ort.env.wasm.numThreads = 1;
+    if (!st.labels) st.labels = await (await fetch("labels.json", {cache:"no-cache"})).json();
+    if (!st.bear) st.bear = await loadModel("bear.onnx");
+    if (!st.animals && (st.labels.animals || []).length) {
+      try { st.animals = await loadModel("animals.onnx"); } catch (e) { st.animals = null; }
+    }
+    $("msg").textContent = "カメラを起動中…";
+    st.stream = await navigator.mediaDevices.getUserMedia({audio:false,
+      video:{facingMode:{ideal:settings.facing}, width:{ideal:1280}, height:{ideal:720}}});
+    video.srcObject = st.stream; await video.play();
+  } catch (e) {
+    showError("開始できませんでした: " + e.message + "\n・カメラの許可を確認してください\n・https:// のページで開いてください\n・bear.onnx と labels.json が同じ場所にあるか確認してください");
+    setBadge("エラー", "err"); $("setup").hidden = false; $("run").hidden = true; return;
+  }
+  Object.assign(st, {running:true, bg:null, streak:0, frames:0, lastShot:0, lastInterval:Date.now(), busy:false});
+  st.counts = {motion:0, bear:0}; render(); keepAwake();
+  st.timer = setInterval(tick, 200);
+}
+function stop() {
+  st.running = false; clearInterval(st.timer);
+  if (st.stream) st.stream.getTracks().forEach(t => t.stop());
+  if (st.wake) { try { st.wake.release(); } catch (e) {} st.wake = null; }
+  $("setup").hidden = false; $("run").hidden = true; $("dim").hidden = true;
+}
+$("start").onclick = start;
+$("stop").onclick = stop;
+$("manual").onclick = () => { if (st.running && !st.busy) analyze("manual", null); };
+$("dimBtn").onclick = () => { $("dim").hidden = false; };
+$("dim").onclick = () => { $("dim").hidden = true; };
+$("csv").onclick = () => {
+  const rows = [["日時","場所","画面内の位置","頭数","信頼度"]].concat(st.bearLog.map(e =>
+    [new Date(e.t).toLocaleString("ja-JP"), e.place, e.pos, e.n, e.confs]));
+  const text = "\ufeff" + rows.map(r => r.map(v => '"' + String(v ?? "").replace(/"/g, '""') + '"').join(",")).join("\r\n");
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text], {type:"text/csv"}));
+  a.download = "bear_log.csv"; a.click();
+};
+$("clearLog").onclick = () => { if (confirm("熊の記録を消しますか?")) { st.bearLog = []; saveLog(); render(); } };
+
+loadSettings(); render();
+</script>
+</body>
+</html>

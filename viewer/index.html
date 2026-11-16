@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>熊出没マップ</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --text:#1d2433; --sub:#667085; --line:#e4e7ec; --red:#d92d20; --amber:#f79009; --blue:#2e6ee6; --green:#12a150; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1a1f27; --text:#e8ebf0; --sub:#98a2b3; --line:#2b323d; } }
+  * { box-sizing:border-box; } [hidden] { display:none !important; }
+  body { margin:0; font-family:system-ui,"Hiragino Sans","Yu Gothic UI",Meiryo,sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--card); border-bottom:1px solid var(--line); }
+  header b { font-size:17px; } main { max-width:960px; margin:0 auto; padding:12px; display:grid; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  label { display:block; font-size:13px; color:var(--sub); margin:10px 0 4px; }
+  input[type=email], input[type=password] { width:100%; padding:10px; font-size:16px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); }
+  button { font-size:15px; border:0; border-radius:8px; padding:10px 14px; cursor:pointer; background:var(--line); color:var(--text); }
+  button.pri { background:var(--blue); color:#fff; } button.ok { background:var(--green); color:#fff; } button.ng { background:var(--red); color:#fff; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px; }
+  .muted { color:var(--sub); font-size:13px; } .msg { margin-top:8px; font-size:14px; }
+  .warn { background:#fef0c7; color:#93370d; padding:10px 12px; border-radius:10px; font-size:13px; }
+  #map { height:58vh; min-height:340px; border-radius:12px; border:1px solid var(--line); z-index:0; }
+  .item { display:flex; justify-content:space-between; gap:10px; padding:10px 0; border-top:1px solid var(--line); cursor:pointer; align-items:center; }
+  .item:first-child { border-top:0; } .item .t { font-size:14px; } .item small { color:var(--sub); }
+  .tag { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:var(--line); }
+  .tag.red { background:#fee4e2; color:#912018; } .tag.amber { background:#fef0c7; color:#93370d; }
+  .legend span { display:inline-flex; align-items:center; gap:6px; margin-right:12px; font-size:13px; }
+  .dot { width:12px; height:12px; border-radius:50%; display:inline-block; }
+</style>
+</head>
+<body>
+<header><b>🐻 熊出没マップ</b><span><span class="muted" id="who"></span> <button id="logout" hidden>ログアウト</button></span></header>
+<main>
+  <section class="card" id="loginCard">
+    <b>ログイン</b>
+    <label for="email">メールアドレス</label><input type="email" id="email" autocomplete="email">
+    <label for="pass">パスワード (6文字以上)</label><input type="password" id="pass" autocomplete="current-password">
+    <div class="row"><button class="pri" id="login">ログイン</button><button id="signup">新規登録</button></div>
+    <div class="msg" id="loginMsg"></div>
+  </section>
+
+  <div id="app" hidden style="display:grid; gap:12px;">
+    <div class="warn">地図の円や扇形は、熊の動きの「目安」です。実際の動きとは異なります。避難や立ち入りの判断は、自治体の情報も確認してください。</div>
+    <div id="map"></div>
+    <section class="card">
+      <div class="legend">
+        <span><i class="dot" style="background:#d92d20"></i>検知した場所</span>
+        <span><i class="dot" style="background:#2e6ee6"></i>カメラ</span>
+        <span><i class="dot" style="border:2px solid #d92d20"></i>1時間後までの範囲(目安)</span>
+        <span><i class="dot" style="border:2px solid #f79009"></i>2時間後までの範囲(目安)</span>
+      </div>
+      <label class="chk" style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="showPred" checked> 行動範囲の目安を表示する</label>
+      <label for="speed">想定する移動の速さ: <b id="speedLabel">1.0</b> km/h (仮の値)</label>
+      <input type="range" id="speed" min="0.3" max="3" step="0.1" value="1" style="width:100%">
+      <div class="row"><button id="locate">現在地を表示</button><span class="muted" id="updated"></span></div>
+    </section>
+    <section class="card" id="adminCard" hidden>
+      <b>確認待ちの検知 (管理者用)</b>
+      <div class="muted">「確認して通知」を押すと、近くの登録者にLINEが送られます。誤検知なら「誤検知」を押してください。</div>
+      <div id="pending"></div><div class="msg" id="adminMsg"></div>
+    </section>
+    <section class="card"><b>最近の検知 (24時間以内)</b><div id="list"><span class="muted">読み込み中…</span></div></section>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.7/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script>
+"use strict";
+// ---- PURE START
+const R_EARTH = 6371, rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
+function distKm(a1, o1, a2, o2) {
+  const dA = rad(a2 - a1), dO = rad(o2 - o1);
+  const a = Math.sin(dA / 2) ** 2 + Math.cos(rad(a1)) * Math.cos(rad(a2)) * Math.sin(dO / 2) ** 2;
+  return 2 * R_EARTH * Math.asin(Math.sqrt(a));
+}
+function bearingDeg(a1, o1, a2, o2) {
+  const y = Math.sin(rad(o2 - o1)) * Math.cos(rad(a2));
+  const x = Math.cos(rad(a1)) * Math.sin(rad(a2)) - Math.sin(rad(a1)) * Math.cos(rad(a2)) * Math.cos(rad(o2 - o1));
+  return (deg(Math.atan2(y, x)) + 360) % 360;
+}
+function destPoint(lat, lng, brg, km) {
+  const d = km / R_EARTH, b = rad(brg), p1 = rad(lat), l1 = rad(lng);
+  const p2 = Math.asin(Math.sin(p1) * Math.cos(d) + Math.cos(p1) * Math.sin(d) * Math.cos(b));
+  const l2 = l1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(p1), Math.cos(d) - Math.sin(p1) * Math.sin(p2));
+  return [deg(p2), ((deg(l2) + 540) % 360) - 180];
+}
+function sectorPoints(lat, lng, heading, half, km, steps = 18) {
+  const pts = [[lat, lng]];
+  for (let i = 0; i <= steps; i++) pts.push(destPoint(lat, lng, heading - half + (2 * half * i) / steps, km));
+  return pts;
+}
+// dets: 新しい順。{camera_id, t(ms), lat, lng}。別のカメラで続けて検知されていれば、進行方向を推定する
+function findTrack(dets, now, windowMs) {
+  const recent = dets.filter(d => now - d.t <= windowMs);
+  if (recent.length < 2) return null;
+  const last = recent[0];
+  for (let i = 1; i < recent.length; i++) {
+    const p = recent[i];
+    if (p.camera_id !== last.camera_id && last.t > p.t) {
+      const km = distKm(p.lat, p.lng, last.lat, last.lng);
+      if (km > 0.05) return {from: p, to: last, heading: bearingDeg(p.lat, p.lng, last.lat, last.lng), km};
+    }
+  }
+  return null;
+}
+function ageText(ms) {
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return "たった今"; if (m < 60) return m + "分前";
+  return Math.floor(m / 60) + "時間" + (m % 60) + "分前";
+}
+// ---- PURE END
+
+const $ = id => document.getElementById(id);
+const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const cfg = window.APP_CONFIG || {};
+const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+const HOUR = 3600e3;
+let map, layers = {}, cams = [], dets = [], pending = [], isAdmin = false, markers = {}, timer = null, focused = false, selfLayer = null;
+
+function initMap() {
+  if (map) return;
+  map = L.map("map", {zoomControl:true}).setView([36.2, 138.2], 5);
+  L.tileLayer("https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png",
+    {attribution:'<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a>', maxZoom:18}).addTo(map);
+  layers = {cams:L.layerGroup().addTo(map), dets:L.layerGroup().addTo(map), pred:L.layerGroup().addTo(map)};
+}
+const camOf = id => cams.find(c => c.id === id);
+const fmt = ms => new Date(ms).toLocaleString("ja-JP", {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"});
+
+async function loadData() {
+  const since = new Date(Date.now() - 24 * HOUR).toISOString();
+  const c = await sb.from("cameras").select("id,name,lat,lng");
+  const d = await sb.from("detections").select("*").gte("detected_at", since).order("detected_at", {ascending:false}).limit(200);
+  if (c.error || d.error) { $("list").textContent = "データを読み込めません: " + (c.error || d.error).message; return; }
+  cams = c.data;
+  dets = d.data.filter(x => x.status === "confirmed" && !x.is_test);
+  pending = isAdmin ? d.data.filter(x => x.status === "pending") : [];
+  $("updated").textContent = "更新: " + new Date().toLocaleTimeString("ja-JP");
+  render();
+}
+
+function render() {
+  initMap(); Object.values(layers).forEach(l => l.clearLayers()); markers = {};
+  const now = Date.now(), speed = parseFloat($("speed").value);
+  cams.forEach(c => L.circleMarker([c.lat, c.lng], {radius:7, color:"#2e6ee6", fillColor:"#2e6ee6", fillOpacity:.9, weight:2})
+    .bindTooltip(esc(c.name)).addTo(layers.cams));
+
+  const items = dets.map(x => { const c = camOf(x.camera_id) || {}; return {...x, t:Date.parse(x.detected_at), lat:c.lat, lng:c.lng, cname:c.name || "?"}; })
+    .filter(x => x.lat != null);
+  items.forEach(x => {
+    const age = now - x.t;
+    const m = L.circleMarker([x.lat, x.lng], {radius:10, color:"#a32d2d", fillColor:"#d92d20", fillOpacity:Math.max(.3, 1 - age / (24 * HOUR)), weight:2})
+      .bindPopup(`<b>${esc(x.cname)}</b><br>${esc(fmt(x.t))} (${ageText(age)})<br>信頼度 ${x.confidence != null ? Number(x.confidence).toFixed(2) : "-"}${x.position ? "・画面の" + esc(x.position) : ""}`)
+      .addTo(layers.dets);
+    markers[x.id] = m;
+  });
+
+  if ($("showPred").checked) {
+    const seen = new Set();                                         // カメラごとに、3時間以内の一番新しい検知
+    items.filter(x => now - x.t <= 3 * HOUR).forEach(x => {
+      if (seen.has(x.camera_id)) return; seen.add(x.camera_id);
+      [[2, "#f79009", "2時間後までの範囲(目安)"], [1, "#d92d20", "1時間後までの範囲(目安)"]].forEach(([h, col, label]) =>
+        L.circle([x.lat, x.lng], {radius:speed * h * 1000, color:col, weight:2, dashArray:"6 6", fillColor:col, fillOpacity:.06})
+          .bindTooltip(label, {sticky:true}).addTo(layers.pred));
+    });
+    const track = findTrack(items.filter(x => !x.is_test), now, 3 * HOUR);
+    if (track) [[2, "#f79009"], [1, "#d92d20"]].forEach(([h, col]) =>
+      L.polygon(sectorPoints(track.to.lat, track.to.lng, track.heading, 40, speed * h), {color:col, weight:1, fillColor:col, fillOpacity:.15})
+        .bindTooltip(`進行方向の目安 (${h}時間後まで)`, {sticky:true}).addTo(layers.pred));
+  }
+
+  $("list").innerHTML = items.length ? items.map(x => `<div class="item" data-id="${esc(x.id)}"><div class="t"><b>${esc(x.cname)}</b><br>
+    <small>${esc(fmt(x.t))} (${ageText(now - x.t)})</small></div>
+    <span class="tag ${now - x.t <= HOUR ? "red" : now - x.t <= 3 * HOUR ? "amber" : ""}">${x.confidence != null ? Number(x.confidence).toFixed(2) : ""}${x.position ? " " + esc(x.position) : ""}</span></div>`).join("")
+    : '<span class="muted">この24時間に、確認された検知はありません。</span>';
+  $("list").querySelectorAll(".item").forEach(el => el.onclick = () => focusDet(el.dataset.id));
+
+  $("adminCard").hidden = !isAdmin;
+  $("pending").innerHTML = pending.length ? pending.map(p => { const c = camOf(p.camera_id) || {name:"?"}; return `<div class="item" style="cursor:default">
+    <div class="t"><b>${esc(c.name)}</b><br><small>${esc(fmt(Date.parse(p.detected_at)))} 信頼度 ${p.confidence != null ? Number(p.confidence).toFixed(2) : "-"}${p.position ? "・" + esc(p.position) : ""}</small></div>
+    <span><button class="ok" data-a="confirm" data-id="${esc(p.id)}">確認して通知</button> <button class="ng" data-a="reject" data-id="${esc(p.id)}">誤検知</button></span></div>`; }).join("")
+    : '<div class="muted" style="margin-top:8px">確認待ちはありません。</div>';
+  $("pending").querySelectorAll("button").forEach(b => b.onclick = () => act(b.dataset.id, b.dataset.a));
+
+  if (!focused) {
+    const want = new URLSearchParams(location.search).get("d");
+    if (want && markers[want]) { focusDet(want); focused = true; }
+    else if (!focused && (items.length || cams.length)) {
+      const pts = (items.length ? items : cams).map(p => [p.lat, p.lng]); map.fitBounds(pts, {padding:[40, 40], maxZoom:14}); focused = true;
+    }
+  }
+}
+function focusDet(id) { const m = markers[id]; if (m) { map.setView(m.getLatLng(), Math.max(map.getZoom(), 14)); m.openPopup(); window.scrollTo({top:0, behavior:"smooth"}); } }
+
+async function act(id, action) {
+  const {data:{session}} = await sb.auth.getSession();
+  $("adminMsg").textContent = "処理中…";
+  try {
+    const r = await fetch(cfg.FUNCTIONS_URL + "/confirm", {method:"POST",
+      headers:{"Content-Type":"application/json", Authorization:"Bearer " + session.access_token}, body:JSON.stringify({id, action})});
+    const j = await r.json().catch(() => ({}));
+    $("adminMsg").textContent = j.ok ? (action === "confirm" ? `通知しました (${j.notified}人)${j.notify_error ? " ※LINE送信エラー: " + j.notify_error : ""}` : "誤検知として処理しました")
+                                     : "できませんでした: " + (j.error || r.status);
+  } catch (e) { $("adminMsg").textContent = "通信できません"; }
+  loadData();
+}
+
+async function enter(session) {
+  $("loginCard").hidden = true; $("app").hidden = false; $("logout").hidden = false; $("who").textContent = session.user.email;
+  const a = await sb.from("admins").select("user_id").maybeSingle();
+  isAdmin = !!(a.data);
+  initMap(); setTimeout(() => map.invalidateSize(), 100);
+  await loadData(); clearInterval(timer); timer = setInterval(loadData, 15000);
+}
+function leave() {
+  clearInterval(timer); $("app").hidden = true; $("loginCard").hidden = false; $("logout").hidden = true; $("who").textContent = ""; isAdmin = false;
+}
+$("login").onclick = async () => {
+  $("loginMsg").textContent = "ログイン中…";
+  const {error} = await sb.auth.signInWithPassword({email:$("email").value.trim(), password:$("pass").value});
+  $("loginMsg").textContent = error ? "ログインできません: " + error.message : "";
+};
+$("signup").onclick = async () => {
+  const {data, error} = await sb.auth.signUp({email:$("email").value.trim(), password:$("pass").value});
+  $("loginMsg").textContent = error ? "登録できません: " + error.message
+    : data.session ? "" : "登録しました。確認メールが届いたら、メール内のリンクを押してから、ログインしてください。";
+};
+$("logout").onclick = () => sb.auth.signOut();
+sb.auth.onAuthStateChange((_e, session) => { setTimeout(() => { if (session) enter(session); else leave(); }, 0); });
+$("showPred").onchange = render;
+$("speed").oninput = () => { $("speedLabel").textContent = parseFloat($("speed").value).toFixed(1); render(); };
+$("locate").onclick = () => {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(p => {
+    const ll = [p.coords.latitude, p.coords.longitude]; if (selfLayer) selfLayer.remove();
+    selfLayer = L.layerGroup([L.circleMarker(ll, {radius:8, color:"#12a150", fillColor:"#12a150", fillOpacity:.9}).bindTooltip("現在地"),
+      L.circle(ll, {radius:2000, color:"#12a150", weight:1, fillOpacity:.04}).bindTooltip("半径2km")]).addTo(map); map.setView(ll, 13);
+  }, () => alert("現在地を取得できませんでした"));
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ライブ映像</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --text:#1d2433; --sub:#667085; --line:#e4e7ec; --red:#d92d20; --blue:#2e6ee6; --green:#12a150; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1a1f27; --text:#e8ebf0; --sub:#98a2b3; --line:#2b323d; } }
+  * { box-sizing:border-box; } [hidden] { display:none !important; }
+  body { margin:0; font-family:system-ui,"Hiragino Sans","Yu Gothic UI",Meiryo,sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; justify-content:space-between; align-items:center; padding:10px 14px; background:var(--card); border-bottom:1px solid var(--line); }
+  main { max-width:1400px; margin:0 auto; padding:12px; display:grid; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; }
+  label { display:block; font-size:13px; color:var(--sub); margin:10px 0 4px; }
+  input[type=email], input[type=password] { width:100%; padding:10px; font-size:16px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); }
+  button { font-size:15px; border:0; border-radius:8px; padding:10px 14px; cursor:pointer; background:var(--line); color:var(--text); }
+  button.pri { background:var(--blue); color:#fff; }
+  .muted { color:var(--sub); font-size:13px; } .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  .warn { background:#fef0c7; color:#93370d; padding:10px 12px; border-radius:10px; font-size:13px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); }
+  .tile { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:8px; }
+  .tile.big { grid-column:1 / -1; }
+  .cap { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:8px; font-size:14px; }
+  .st { font-size:12px; padding:2px 10px; border-radius:999px; background:var(--line); white-space:nowrap; }
+  .st.live { background:#d1fadf; color:#05603a; }
+  .tile img { width:100%; aspect-ratio:16/9; object-fit:contain; background:#000; border-radius:8px; display:block; cursor:zoom-in; }
+  .tile.big img { cursor:zoom-out; max-height:80vh; }
+</style>
+</head>
+<body>
+<header><b>📹 ライブ映像</b><span><a href="./" style="margin-right:10px">地図に戻る</a><span class="muted" id="who"></span> <button id="logout" hidden>ログアウト</button></span></header>
+<main>
+  <section class="card" id="loginCard" style="max-width:420px">
+    <b>ログイン</b>
+    <label for="email">メールアドレス</label><input type="email" id="email" autocomplete="email">
+    <label for="pass">パスワード</label><input type="password" id="pass" autocomplete="current-password">
+    <div class="row"><button class="pri" id="login">ログイン</button></div>
+    <div class="muted" id="loginMsg" style="margin-top:8px"></div>
+  </section>
+  <div id="app" hidden style="display:grid; gap:12px;">
+    <div class="warn">映像は、この画面を開いている間だけ、カメラのスマホから送られます(1秒に1枚ほどの、コマ送りの映像です)。映像には人が写ることがあります。見られるのは、許可されたアカウントだけです。</div>
+    <div class="grid" id="grid"></div>
+    <div class="muted" id="msg"></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.7/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const cfg = window.APP_CONFIG || {};
+const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+let tiles = [], watchTimer = null, statusTimer = null;
+
+function clearAll() {
+  clearInterval(watchTimer); clearInterval(statusTimer);
+  tiles.forEach(t => { try { sb.removeChannel(t.ch); } catch (e) {} });
+  tiles = []; $("grid").innerHTML = "";
+}
+function sendWatch() {
+  if (document.visibilityState !== "visible") return;                 // 画面を見ていないときは、要求しない (カメラの通信量を節約)
+  tiles.forEach(t => { if (t.joined) t.ch.send({type:"broadcast", event:"watch", payload:{}}); });
+}
+function paintStatus() {
+  const now = Date.now();
+  tiles.forEach(t => {
+    const live = t.last && now - t.last < 4000;
+    t.badge.textContent = live ? "● ライブ" : (t.last ? "● 受信なし" : "接続待ち…");
+    t.badge.className = "st" + (live ? " live" : "");
+  });
+}
+async function enter(session) {
+  $("loginCard").hidden = true; $("app").hidden = false; $("logout").hidden = false; $("who").textContent = session.user.email;
+  clearAll(); $("msg").textContent = "読み込み中…";
+  const [t, c] = await Promise.all([sb.from("camera_stream_tokens").select("camera_id,token"), sb.from("cameras").select("id,name")]);
+  if (t.error || c.error) { $("msg").textContent = "読み込めません: " + (t.error || c.error).message; return; }
+  if (!t.data.length) {
+    $("msg").textContent = "見られるカメラがありません。このアカウントに、ライブ映像を見る権限がないか、カメラが登録されていません。(管理者に、権限を頼んでください)"; return;
+  }
+  $("msg").textContent = "";
+  t.data.forEach(row => {
+    const cam = c.data.find(x => x.id === row.camera_id); if (!cam) return;
+    const el = document.createElement("div"); el.className = "tile";
+    el.innerHTML = `<div class="cap"><b>${esc(cam.name)}</b><span class="st">接続待ち…</span></div><img alt="${esc(cam.name)}">`;
+    el.querySelector("img").onclick = () => el.classList.toggle("big");
+    $("grid").appendChild(el);
+    const tile = {ch:null, joined:false, last:0, img:el.querySelector("img"), badge:el.querySelector(".st")};
+    tile.ch = sb.channel("cam:" + row.token, {config:{broadcast:{self:false}}});
+    tile.ch.on("broadcast", {event:"frame"}, ({payload}) => {
+      if (payload && typeof payload.img === "string" && payload.img.startsWith("data:image/jpeg")) { tile.img.src = payload.img; tile.last = Date.now(); }
+    });
+    tile.ch.subscribe(s => { tile.joined = s === "SUBSCRIBED"; if (tile.joined) sendWatch(); });
+    tiles.push(tile);
+  });
+  watchTimer = setInterval(sendWatch, 5000); statusTimer = setInterval(paintStatus, 1000);
+}
+function leave() { clearAll(); $("app").hidden = true; $("loginCard").hidden = false; $("logout").hidden = true; $("who").textContent = ""; }
+$("login").onclick = async () => {
+  $("loginMsg").textContent = "ログイン中…";
+  const {error} = await sb.auth.signInWithPassword({email:$("email").value.trim(), password:$("pass").value});
+  $("loginMsg").textContent = error ? "ログインできません: " + error.message : "";
+};
+$("logout").onclick = () => sb.auth.signOut();
+sb.auth.onAuthStateChange((_e, session) => { setTimeout(() => { if (session) enter(session); else leave(); }, 0); });
+</script>
+</body>
+</html>

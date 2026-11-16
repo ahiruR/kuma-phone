@@ -30,7 +30,7 @@
 </style>
 </head>
 <body>
-<header><b>🐻 熊出没マップ</b><span><span class="muted" id="who"></span> <button id="logout" hidden>ログアウト</button></span></header>
+<header><b>🐻 熊出没マップ</b><span><a id="liveLink" href="monitor.html" hidden style="margin-right:10px">📹 ライブ映像</a><span class="muted" id="who"></span> <button id="logout" hidden>ログアウト</button></span></header>
 <main>
   <section class="card" id="loginCard">
     <b>ログイン</b>
@@ -212,11 +212,13 @@ async function enter(session) {
   $("loginCard").hidden = true; $("app").hidden = false; $("logout").hidden = false; $("who").textContent = session.user.email;
   const a = await sb.from("admins").select("user_id").maybeSingle();
   isAdmin = !!(a.data);
+  const m = await sb.from("monitors").select("user_id").maybeSingle();
+  $("liveLink").hidden = !(isAdmin || (m.data && m.data.user_id));
   initMap(); setTimeout(() => map.invalidateSize(), 100);
   await loadData(); clearInterval(timer); timer = setInterval(loadData, 15000);
 }
 function leave() {
-  clearInterval(timer); $("app").hidden = true; $("loginCard").hidden = false; $("logout").hidden = true; $("who").textContent = ""; isAdmin = false;
+  clearInterval(timer); $("app").hidden = true; $("loginCard").hidden = false; $("logout").hidden = true; $("who").textContent = ""; isAdmin = false; $("liveLink").hidden = true;
 }
 $("login").onclick = async () => {
   $("loginMsg").textContent = "ログイン中…";

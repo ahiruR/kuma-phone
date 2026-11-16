@@ -27,6 +27,8 @@
   .dbg { font-size:11px; color:var(--sub); margin-top:4px; word-break:break-all; }
   .view { aspect-ratio:16/9; background:#000; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#98a2b3; font-size:13px; overflow:hidden; cursor:zoom-in; }
   .view img { width:100%; height:100%; object-fit:contain; display:block; }
+  .view.has { aspect-ratio:auto; background:transparent; }
+  .view.has img { height:auto; max-height:80vh; }
   .tile.big .view { cursor:zoom-out; max-height:80vh; }
 </style>
 </head>
@@ -93,10 +95,10 @@ async function enter(session) {
     el.innerHTML = `<div class="cap"><b>${esc(cam.name)}</b><span class="st">接続待ち…</span></div><div class="view"><img alt="" hidden><span class="ph">映像を待っています…</span></div><div class="dbg"></div>`;
     el.querySelector(".view").onclick = () => el.classList.toggle("big");
     $("grid").appendChild(el);
-    const tile = {ch:null, joined:false, last:0, state:"接続中", sent:0, sendRes:"-", frames:0, dbg:el.querySelector(".dbg"), img:el.querySelector("img"), ph:el.querySelector(".ph"), badge:el.querySelector(".st")};
+    const tile = {ch:null, joined:false, last:0, state:"接続中", sent:0, sendRes:"-", frames:0, dbg:el.querySelector(".dbg"), view:el.querySelector(".view"), img:el.querySelector("img"), ph:el.querySelector(".ph"), badge:el.querySelector(".st")};
     tile.ch = sb.channel("cam:" + row.token, {config:{broadcast:{self:false}}});
     tile.ch.on("broadcast", {event:"frame"}, ({payload}) => {
-      if (payload && typeof payload.img === "string" && payload.img.startsWith("data:image/jpeg")) { tile.img.src = payload.img; tile.img.hidden = false; tile.ph.hidden = true; tile.last = Date.now(); tile.frames++; }
+      if (payload && typeof payload.img === "string" && payload.img.startsWith("data:image/jpeg")) { tile.img.src = payload.img; tile.img.hidden = false; tile.ph.hidden = true; tile.view.classList.add("has"); tile.last = Date.now(); tile.frames++; }
     });
     tile.ch.subscribe((s, err) => { tile.joined = s === "SUBSCRIBED"; tile.state = s + (err && err.message ? " (" + err.message + ")" : ""); if (tile.joined) sendWatch(); });
     tiles.push(tile);

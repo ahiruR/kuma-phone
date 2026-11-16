@@ -116,7 +116,10 @@ function ageText(ms) {
 const $ = id => document.getElementById(id);
 const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const cfg = window.APP_CONFIG || {};
-const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+const cfgOk = /^https:\/\/[A-Za-z0-9-]+\.supabase\.co\/?$/.test(cfg.SUPABASE_URL || "") && /^[\x21-\x7e]+$/.test(cfg.SUPABASE_ANON_KEY || "");
+const CFG_MSG = "config.js が、自分のSupabaseの値に書き換わっていません (URLやキーに、日本語や「xxxx」が残っています)。READMEのB-4を確認してください。";
+const sb = cfgOk ? supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY) : null;
+if (!cfgOk) $("loginMsg").textContent = CFG_MSG;
 const HOUR = 3600e3;
 let map, layers = {}, cams = [], dets = [], pending = [], isAdmin = false, markers = {}, timer = null, focused = false, selfLayer = null;
 
@@ -221,17 +224,19 @@ function leave() {
   clearInterval(timer); $("app").hidden = true; $("loginCard").hidden = false; $("logout").hidden = true; $("who").textContent = ""; isAdmin = false; $("liveLink").hidden = true;
 }
 $("login").onclick = async () => {
+  if (!sb) { $("loginMsg").textContent = CFG_MSG; return; }
   $("loginMsg").textContent = "ログイン中…";
   const {error} = await sb.auth.signInWithPassword({email:$("email").value.trim(), password:$("pass").value});
   $("loginMsg").textContent = error ? "ログインできません: " + error.message : "";
 };
 $("signup").onclick = async () => {
+  if (!sb) { $("loginMsg").textContent = CFG_MSG; return; }
   const {data, error} = await sb.auth.signUp({email:$("email").value.trim(), password:$("pass").value});
   $("loginMsg").textContent = error ? "登録できません: " + error.message
     : data.session ? "" : "登録しました。確認メールが届いたら、メール内のリンクを押してから、ログインしてください。";
 };
 $("logout").onclick = () => sb.auth.signOut();
-sb.auth.onAuthStateChange((_e, session) => { setTimeout(() => { if (session) enter(session); else leave(); }, 0); });
+if (sb) sb.auth.onAuthStateChange((_e, session) => { setTimeout(() => { if (session) enter(session); else leave(); }, 0); });
 $("showPred").onchange = render;
 $("speed").oninput = () => { $("speedLabel").textContent = parseFloat($("speed").value).toFixed(1); render(); };
 $("locate").onclick = () => {

@@ -52,7 +52,10 @@
 const $ = id => document.getElementById(id);
 const esc = t => String(t ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const cfg = window.APP_CONFIG || {};
-const sb = supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+const cfgOk = /^https:\/\/[A-Za-z0-9-]+\.supabase\.co\/?$/.test(cfg.SUPABASE_URL || "") && /^[\x21-\x7e]+$/.test(cfg.SUPABASE_ANON_KEY || "");
+const CFG_MSG = "config.js が、自分のSupabaseの値に書き換わっていません (URLやキーに、日本語や「xxxx」が残っています)。READMEのB-4を確認してください。";
+const sb = cfgOk ? supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY) : null;
+if (!cfgOk) $("loginMsg").textContent = CFG_MSG;
 let tiles = [], watchTimer = null, statusTimer = null;
 
 function clearAll() {
@@ -99,12 +102,13 @@ async function enter(session) {
 }
 function leave() { clearAll(); $("app").hidden = true; $("loginCard").hidden = false; $("logout").hidden = true; $("who").textContent = ""; }
 $("login").onclick = async () => {
+  if (!sb) { $("loginMsg").textContent = CFG_MSG; return; }
   $("loginMsg").textContent = "ログイン中…";
   const {error} = await sb.auth.signInWithPassword({email:$("email").value.trim(), password:$("pass").value});
   $("loginMsg").textContent = error ? "ログインできません: " + error.message : "";
 };
 $("logout").onclick = () => sb.auth.signOut();
-sb.auth.onAuthStateChange((_e, session) => { setTimeout(() => { if (session) enter(session); else leave(); }, 0); });
+if (sb) sb.auth.onAuthStateChange((_e, session) => { setTimeout(() => { if (session) enter(session); else leave(); }, 0); });
 </script>
 </body>
 </html>

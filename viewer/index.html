@@ -121,6 +121,7 @@ const CFG_MSG = "config.js が、自分のSupabaseの値に書き換わってい
 const sb = cfgOk ? supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY) : null;
 if (!cfgOk) $("loginMsg").textContent = CFG_MSG;
 const HOUR = 3600e3;
+const photoUrl = p => cfg.SUPABASE_URL.replace(/\/$/, "") + "/storage/v1/object/public/detections/" + encodeURI(p);
 let map, layers = {}, cams = [], dets = [], pending = [], isAdmin = false, markers = {}, timer = null, focused = false, selfLayer = null;
 
 function initMap() {
@@ -156,7 +157,7 @@ function render() {
   items.forEach(x => {
     const age = now - x.t;
     const m = L.circleMarker([x.lat, x.lng], {radius:10, color:"#a32d2d", fillColor:"#d92d20", fillOpacity:Math.max(.3, 1 - age / (24 * HOUR)), weight:2})
-      .bindPopup(`<b>${esc(x.cname)}</b><br>${esc(fmt(x.t))} (${ageText(age)})<br>信頼度 ${x.confidence != null ? Number(x.confidence).toFixed(2) : "-"}${x.position ? "・画面の" + esc(x.position) : ""}`)
+      .bindPopup(`<b>${esc(x.cname)}</b><br>${esc(fmt(x.t))} (${ageText(age)})<br>信頼度 ${x.confidence != null ? Number(x.confidence).toFixed(2) : "-"}${x.position ? "・画面の" + esc(x.position) : ""}${x.photo_path ? `<br><img src="${esc(photoUrl(x.photo_path))}" style="width:220px;max-width:100%;border-radius:6px;margin-top:6px">` : ""}`, {maxWidth:260})
       .addTo(layers.dets);
     markers[x.id] = m;
   });
@@ -183,7 +184,7 @@ function render() {
 
   $("adminCard").hidden = !isAdmin;
   $("pending").innerHTML = pending.length ? pending.map(p => { const c = camOf(p.camera_id) || {name:"?"}; return `<div class="item" style="cursor:default">
-    <div class="t"><b>${esc(c.name)}</b><br><small>${esc(fmt(Date.parse(p.detected_at)))} 信頼度 ${p.confidence != null ? Number(p.confidence).toFixed(2) : "-"}${p.position ? "・" + esc(p.position) : ""}</small></div>
+    ${p.photo_path ? `<img src="${esc(photoUrl(p.photo_path))}" style="height:64px;border-radius:6px;margin-right:10px">` : ""}<div class="t"><b>${esc(c.name)}</b><br><small>${esc(fmt(Date.parse(p.detected_at)))} 信頼度 ${p.confidence != null ? Number(p.confidence).toFixed(2) : "-"}${p.position ? "・" + esc(p.position) : ""}</small></div>
     <span><button class="ok" data-a="confirm" data-id="${esc(p.id)}">確認して通知</button> <button class="ng" data-a="reject" data-id="${esc(p.id)}">誤検知</button></span></div>`; }).join("")
     : '<div class="muted" style="margin-top:8px">確認待ちはありません。</div>';
   $("pending").querySelectorAll("button").forEach(b => b.onclick = () => act(b.dataset.id, b.dataset.a));

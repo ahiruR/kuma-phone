@@ -322,7 +322,7 @@ async function classifyRegion(frame, nb) {
 }
 
 // ======================================================= 記録・通知
-function snapshot(frame, boxes, width) {
+function snapshot(frame, boxes, width, quality) {
   const k = Math.min(1, width / frame.width), c = document.createElement("canvas");
   c.width = Math.round(frame.width * k); c.height = Math.round(frame.height * k);
   const ctx = c.getContext("2d"); ctx.drawImage(frame, 0, 0, c.width, c.height);
@@ -332,7 +332,7 @@ function snapshot(frame, boxes, width) {
     ctx.fillStyle = "#00e000"; ctx.fillText("Bear " + b.conf.toFixed(2), b.x1 * k + 2, Math.max(16, b.y1 * k - 4));
   }
   ctx.fillStyle = "#fff"; ctx.fillText(new Date().toLocaleString("ja-JP"), 8, 22);
-  return c.toDataURL("image/jpeg", 0.7);
+  return c.toDataURL("image/jpeg", quality || 0.7);
 }
 async function notify(message) {
   const now = Date.now(); if (!settings.topic || now - st.lastNotifyAt < NOTIFY_GAP) return;
@@ -385,15 +385,15 @@ function stopLive() {
   if (st.live) { try { st.live.sb.removeChannel(st.live.ch); } catch (e) {} st.live = null; }
   st.liveState = ""; st.watchUntil = 0;
 }
-async function reportCloud(bears, pos) {
+async function reportCloud(bears, pos, photo) {
   if (!settings.cloudUrl || !settings.cameraKey) return;
   try {
     const r = await fetch(settings.cloudUrl.replace(/\/+$/, "") + "/report", {method:"POST",
       headers:{"Content-Type":"application/json", "x-camera-key":settings.cameraKey},
-      body: JSON.stringify({confidence: Math.max(...bears.map(b => b.conf)), count: bears.length, pos, test: !!settings.cloudTest})});
+      body: JSON.stringify({confidence: Math.max(...bears.map(b => b.conf)), count: bears.length, pos, test: !!settings.cloudTest, photo})});
     const j = await r.json().catch(() => ({}));
     $("cloud").textContent = r.ok && j.ok
-      ? "クラウド: 送信しました (" + (j.skipped ? "短時間の重複のため省略" : j.status === "pending" ? "管理者の確認待ち" : j.notified + "人に通知") + (j.notify_error ? " / LINE送信エラー" : "") + ")"
+      ? "クラウド: 送信しました (" + (j.skipped ? "短時間の重複のため省略" : j.status === "pending" ? "管理者の確認待ち" : j.notified + "人に通知") + (j.photo ? " / 写真つき" : (j.photo_error ? " / 写真は保存できませんでした" : "")) + (j.notify_error ? " / LINE送信エラー" : "") + ")"
       : "クラウド: 送信できません (" + (j.error || r.status) + ")";
   } catch (e) { $("cloud").textContent = "クラウド: 通信できません (あとで再送はされません)"; }
 }
@@ -407,7 +407,10 @@ function onBear(frame, bears) {
   st.bearLog = st.bearLog.slice(0, 200); saveLog();
   showAlert(`${place}(画面の${pos})で熊を検出しました!`);
   if (settings.sound) beep();
-  reportCloud(bears, pos);
+  reportCloud(bears, pos, snapshot(frame, bears, 640, 0.75));
+  if (st.live && st.liveState === "SUBSCRIBED") {                  // PCのモニター画面へ、すぐ知らせる
+    st.live.ch.send({type:"broadcast", event:"bear", payload:{conf: Math.max(...bears.map(b => b.conf)), pos, t: now}});
+  }
   notify(`熊を検出: ${place} (画面の${pos}) 信頼度 ${confs} ${new Date().toLocaleTimeString("ja-JP")}`);
 }
 async function onOther(frame, nb) {

@@ -24,6 +24,11 @@
   .cap { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; gap:8px; font-size:14px; }
   .st { font-size:12px; padding:2px 10px; border-radius:999px; background:var(--line); white-space:nowrap; }
   .st.live { background:#d1fadf; color:#05603a; }
+  .tile.alarm { outline:3px solid var(--red); }
+  #alerts { display:grid; gap:8px; }
+  .alert { background:var(--red); color:#fff; padding:12px 14px; border-radius:12px; font-size:16px; font-weight:700; display:flex; gap:12px; align-items:center; }
+  .alert img { height:72px; border-radius:6px; }
+  .alert a { color:#fff; font-weight:400; font-size:14px; }
   .dbg { font-size:11px; color:var(--sub); margin-top:4px; word-break:break-all; }
   .view { aspect-ratio:16/9; background:#000; border-radius:8px; display:flex; align-items:center; justify-content:center; color:#98a2b3; font-size:13px; overflow:hidden; cursor:zoom-in; }
   .view img { width:100%; height:100%; object-fit:contain; display:block; }
@@ -44,6 +49,8 @@
   </section>
   <div id="app" hidden style="display:grid; gap:12px;">
     <div class="warn">映像は、この画面を開いている間だけ、カメラのスマホから送られます(1秒に1枚ほどの、コマ送りの映像です)。映像には人が写ることがあります。見られるのは、許可されたアカウントだけです。</div>
+    <div id="alerts"></div>
+    <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" id="sound" checked> 熊を検知したら音を鳴らす</label>
     <div class="grid" id="grid"></div>
     <div class="muted" id="msg"></div>
   </div>
@@ -60,10 +67,56 @@ const cfgOk = /^https:\/\/[A-Za-z0-9-]+\.supabase\.co\/?$/.test(cfg.SUPABASE_URL
 const CFG_MSG = "config.js が、自分のSupabaseの値に書き換わっていません (URLやキーに、日本語や「xxxx」が残っています)。READMEのB-4を確認してください。";
 const sb = cfgOk ? supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY) : null;
 if (!cfgOk) $("loginMsg").textContent = CFG_MSG;
-let tiles = [], watchTimer = null, statusTimer = null;
+let tiles = [], watchTimer = null, statusTimer = null, pollTimer = null, gen = 0, enteredUser = null;
+const seenDet = new Set(), lastAlert = {};
+let firstPoll = true, audioCtx = null;
+const photoUrl = p => cfg.SUPABASE_URL.replace(/\/$/, "") + "/storage/v1/object/public/detections/" + encodeURI(p);
+function beep() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    for (let i = 0; i < 3; i++) {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = "square"; o.frequency.value = 880; g.gain.value = 0.15; o.connect(g); g.connect(audioCtx.destination);
+      o.start(audioCtx.currentTime + i * 0.35); o.stop(audioCtx.currentTime + i * 0.35 + 0.22);
+    }
+  } catch (e) {}
+}
+// 熊の検知を、画面の上に出す。同じカメラの20秒以内の知らせは、1つにまとめる (写真があとから届いたら、追加する)
+function alertBear(camId, text, photo, link) {
+  const now = Date.now(), tile = tiles.find(t => t.camId === camId), prev = lastAlert[camId];
+  if (tile) { tile.el.classList.add("alarm"); clearTimeout(tile.alarmTimer); tile.alarmTimer = setTimeout(() => tile.el.classList.remove("alarm"), 60000); }
+  if (prev && now - prev.t < 20000 && prev.el.isConnected) {
+    if (photo && !prev.el.querySelector("img")) { const im = document.createElement("img"); im.src = photo; prev.el.prepend(im); }
+    if (link && !prev.el.querySelector("a")) prev.el.insertAdjacentHTML("beforeend", `<a href="${esc(link)}">地図で確認</a>`);
+    return;
+  }
+  const el = document.createElement("div"); el.className = "alert";
+  el.innerHTML = `${photo ? `<img src="${esc(photo)}" alt="">` : ""}<span>⚠ ${esc(text)}</span>${link ? `<a href="${esc(link)}">地図で確認</a>` : ""}`;
+  el.onclick = e => { if (e.target.tagName !== "A") el.remove(); };
+  $("alerts").prepend(el); lastAlert[camId] = {t: now, el};
+  while ($("alerts").children.length > 3) $("alerts").lastChild.remove();
+  setTimeout(() => el.remove(), 120000);
+  if ($("sound").checked) beep();
+}
+async function pollDetections() {
+  const since = new Date(Date.now() - 3600e3).toISOString();
+  const r = await sb.from("detections").select("id,camera_id,detected_at,confidence,position,status,is_test,photo_path")
+    .gte("detected_at", since).order("detected_at", {ascending:false}).limit(20);
+  if (r.error) return;
+  for (const d of r.data.slice().reverse()) {                          // 古い順
+    if (seenDet.has(d.id)) continue; seenDet.add(d.id);
+    if (firstPoll || d.status === "rejected") continue;                // 画面を開いた時点で、すでにあるものは、知らせない
+    const tile = tiles.find(t => t.camId === d.camera_id), name = tile ? tile.name : "カメラ";
+    const state = d.status === "pending" ? "管理者の確認待ち" : "確認済み";
+    alertBear(d.camera_id, `${d.is_test ? "【テスト】" : ""}${name} で熊を検知しました (信頼度 ${d.confidence != null ? Number(d.confidence).toFixed(2) : "-"}${d.position ? "・画面の" + d.position : ""} / ${state})`,
+              d.photo_path ? photoUrl(d.photo_path) : null, "./?d=" + d.id);
+  }
+  firstPoll = false;
+}
 
 function clearAll() {
-  clearInterval(watchTimer); clearInterval(statusTimer);
+  clearInterval(watchTimer); clearInterval(statusTimer); clearInterval(pollTimer);
   tiles.forEach(t => { try { sb.removeChannel(t.ch); } catch (e) {} });
   tiles = []; $("grid").innerHTML = "";
 }
@@ -81,9 +134,12 @@ function paintStatus() {
   });
 }
 async function enter(session) {
+  const my = ++gen;                                                    // ログインの通知が続けて来ても、1回分だけ作る
   $("loginCard").hidden = true; $("app").hidden = false; $("logout").hidden = false; $("who").textContent = session.user.email;
-  clearAll(); $("msg").textContent = "読み込み中…";
+  $("msg").textContent = "読み込み中…";
   const [t, c] = await Promise.all([sb.from("camera_stream_tokens").select("camera_id,token"), sb.from("cameras").select("id,name")]);
+  if (my !== gen) return;                                              // もっと新しい呼び出しがあれば、そちらに任せる
+  clearAll(); firstPoll = true; seenDet.clear();
   if (t.error || c.error) { $("msg").textContent = "読み込めません: " + (t.error || c.error).message; return; }
   if (!t.data.length) {
     $("msg").textContent = "見られるカメラがありません。このアカウントに、ライブ映像を見る権限がないか、カメラが登録されていません。(管理者に、権限を頼んでください)"; return;
@@ -95,17 +151,21 @@ async function enter(session) {
     el.innerHTML = `<div class="cap"><b>${esc(cam.name)}</b><span class="st">接続待ち…</span></div><div class="view"><img alt="" hidden><span class="ph">映像を待っています…</span></div><div class="dbg"></div>`;
     el.querySelector(".view").onclick = () => el.classList.toggle("big");
     $("grid").appendChild(el);
-    const tile = {ch:null, joined:false, last:0, state:"接続中", sent:0, sendRes:"-", frames:0, dbg:el.querySelector(".dbg"), view:el.querySelector(".view"), img:el.querySelector("img"), ph:el.querySelector(".ph"), badge:el.querySelector(".st")};
+    const tile = {camId:cam.id, name:cam.name, el, alarmTimer:null, ch:null, joined:false, last:0, state:"接続中", sent:0, sendRes:"-", frames:0, dbg:el.querySelector(".dbg"), view:el.querySelector(".view"), img:el.querySelector("img"), ph:el.querySelector(".ph"), badge:el.querySelector(".st")};
     tile.ch = sb.channel("cam:" + row.token, {config:{broadcast:{self:false}}});
     tile.ch.on("broadcast", {event:"frame"}, ({payload}) => {
       if (payload && typeof payload.img === "string" && payload.img.startsWith("data:image/jpeg")) { tile.img.src = payload.img; tile.img.hidden = false; tile.ph.hidden = true; tile.view.classList.add("has"); tile.last = Date.now(); tile.frames++; }
+    });
+    tile.ch.on("broadcast", {event:"bear"}, ({payload}) => {
+      alertBear(cam.id, `${cam.name} で熊を検知しました (信頼度 ${payload && payload.conf != null ? Number(payload.conf).toFixed(2) : "-"}${payload && payload.pos ? "・画面の" + payload.pos : ""})`, null, null);
     });
     tile.ch.subscribe((s, err) => { tile.joined = s === "SUBSCRIBED"; tile.state = s + (err && err.message ? " (" + err.message + ")" : ""); if (tile.joined) sendWatch(); });
     tiles.push(tile);
   });
   watchTimer = setInterval(sendWatch, 5000); statusTimer = setInterval(paintStatus, 1000);
+  pollDetections(); pollTimer = setInterval(pollDetections, 5000);
 }
-function leave() { clearAll(); $("app").hidden = true; $("loginCard").hidden = false; $("logout").hidden = true; $("who").textContent = ""; }
+function leave() { gen++; enteredUser = null; clearAll(); $("app").hidden = true; $("loginCard").hidden = false; $("logout").hidden = true; $("who").textContent = ""; }
 $("login").onclick = async () => {
   if (!sb) { $("loginMsg").textContent = CFG_MSG; return; }
   $("loginMsg").textContent = "ログイン中…";
@@ -113,7 +173,13 @@ $("login").onclick = async () => {
   $("loginMsg").textContent = error ? "ログインできません: " + error.message : "";
 };
 $("logout").onclick = () => sb.auth.signOut();
-if (sb) sb.auth.onAuthStateChange((_e, session) => { setTimeout(() => { if (session) enter(session); else leave(); }, 0); });
+if (sb) sb.auth.onAuthStateChange((_e, session) => {
+  setTimeout(() => {
+    if (!session) { leave(); return; }
+    if (enteredUser === session.user.id) return;                       // 同じ人の、更新の通知は、無視する
+    enteredUser = session.user.id; enter(session);
+  }, 0);
+});
 </script>
 </body>
 </html>
